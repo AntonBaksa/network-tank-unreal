@@ -127,7 +127,7 @@ void ATankPlayerController::PlayerTick(float DeltaTime)
 	}
 	if (HasAuthority())
 	{
-		AcceptControlIntent(Tank, Intent); // Listen host/standalone uses the same acceptance path.
+		SubmitLocalControlIntent(Tank, Intent); // Listen host/standalone submits directly, without an RPC.
 	}
 	else if (NetworkTankArena::LocalTank::IsValidDeltaTime(DeltaTime))
 	{
@@ -145,21 +145,30 @@ void ATankPlayerController::SubmitLocalControlIntent(ATankPawn* Tank, const FTan
 {
 	if (IsLocalController() && IsValid(Tank) && GetPawn() == Tank && Tank->GetController() == this)
 	{
-		ServerSubmitControlIntent(Tank, NetworkTankArena::LocalTank::SanitizeIntent(Intent));
+		const uint32 Sequence = NextMovementIntentSequence++;
+		if (HasAuthority())
+		{
+			AcceptControlIntent(Tank, Sequence, Intent);
+		}
+		else
+		{
+			ServerSubmitControlIntent(Tank, Sequence, NetworkTankArena::LocalTank::SanitizeIntent(Intent));
+		}
 	}
 }
 
-void ATankPlayerController::ServerSubmitControlIntent_Implementation(ATankPawn* TargetTank, FTankControlIntent Intent)
+void ATankPlayerController::ServerSubmitControlIntent_Implementation(ATankPawn* TargetTank, uint32 Sequence, FTankControlIntent Intent)
 {
-	AcceptControlIntent(TargetTank, Intent);
+	AcceptControlIntent(TargetTank, Sequence, Intent);
 }
 
-void ATankPlayerController::AcceptControlIntent(ATankPawn* TargetTank, const FTankControlIntent& Intent)
+void ATankPlayerController::AcceptControlIntent(ATankPawn* TargetTank, uint32 Sequence, const FTankControlIntent& Intent)
 {
 	// The RPC is routed through the owned controller. Never let its caller name another
 	// player's tank, or let an in-flight update for an old pawn affect a new possession.
 	if (HasAuthority() && IsValid(TargetTank) && TargetTank->HasAuthority()
-		&& GetPawn() == TargetTank && TargetTank->GetController() == this)
+		&& GetPawn() == TargetTank && TargetTank->GetController() == this
+		&& AcceptedMovementIntentSequence.TryAccept(Sequence))
 	{
 		TargetTank->SubmitControlIntent(Intent); // Pawn sanitizes again at the authority boundary.
 	}
