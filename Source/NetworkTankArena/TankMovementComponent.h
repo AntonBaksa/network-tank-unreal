@@ -17,6 +17,7 @@ public:
 	void SimulateMovement(const FTankControlIntent& Intent, float DeltaTime);
 	double GetGameplayPlaneZ() const { return GetPlaneConstraintOrigin().Z; }
 	virtual float GetMaxSpeed() const override;
+	float GetTurnRateDegreesPerSecond() const { return TurnRateDegreesPerSecond; }
 
 private:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank|Movement", meta = (ClampMin = "0", Units = "cm/s"))

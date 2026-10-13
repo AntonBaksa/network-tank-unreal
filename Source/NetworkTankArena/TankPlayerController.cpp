@@ -7,6 +7,7 @@
 #include "InputAction.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
+#include "Kismet/GameplayStatics.h"
 #include "TankGameplayMath.h"
 #include "TankPawn.h"
 #include "UnrealClient.h"
@@ -26,6 +27,10 @@ void ATankPlayerController::ReceivedPlayer()
 void ATankPlayerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
+	if (!IsLocalController())
+	{
+		return;
+	}
 	UEnhancedInputComponent* EnhancedInput = Cast<UEnhancedInputComponent>(InputComponent);
 	if (!EnhancedInput)
 	{
@@ -47,13 +52,13 @@ void ATankPlayerController::SetupInputComponent()
 
 void ATankPlayerController::UpdateThrottle(const FInputActionValue& Value)
 {
-	CachedThrottle = Value.GetValueType() == EInputActionValueType::Axis1D
+	CachedThrottle = IsLocalController() && Value.GetValueType() == EInputActionValueType::Axis1D
 		? NetworkTankArena::LocalTank::SanitizeAxis(Value.Get<float>()) : 0.f;
 }
 
 void ATankPlayerController::UpdateTurn(const FInputActionValue& Value)
 {
-	CachedTurn = Value.GetValueType() == EInputActionValueType::Axis1D
+	CachedTurn = IsLocalController() && Value.GetValueType() == EInputActionValueType::Axis1D
 		? NetworkTankArena::LocalTank::SanitizeAxis(Value.Get<float>()) : 0.f;
 }
 
@@ -71,9 +76,18 @@ void ATankPlayerController::ClearCachedInput()
 {
 	ClearThrottle();
 	ClearTurn();
+	SecondsUntilInputSend = 0.f;
 	if (ATankPawn* Tank = Cast<ATankPawn>(GetPawn()))
 	{
-		Tank->ClearControlIntent();
+		if (HasAuthority())
+		{
+			Tank->ClearControlIntent();
+		}
+		else if (IsLocalController())
+		{
+			// A lost neutral packet is repaired by the following periodic heartbeat.
+			SubmitLocalControlIntent(Tank, FTankControlIntent{});
+		}
 	}
 }
 
@@ -87,30 +101,100 @@ void ATankPlayerController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime); // Processes this frame's Enhanced Input before assembling intent.
 	ATankPawn* Tank = Cast<ATankPawn>(GetPawn());
-	if (!IsLocalController() || !IsValid(Tank))
+	if (!IsLocalController() || !IsValid(Tank) || Tank->GetController() != this)
 	{
 		return;
 	}
 	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	const FViewport* Viewport = LocalPlayer && LocalPlayer->ViewportClient ? LocalPlayer->ViewportClient->Viewport : nullptr;
-	if (!Viewport || !Viewport->HasFocus())
+	FTankControlIntent Intent;
+	if (Viewport && Viewport->HasFocus())
+	{
+		Intent.Throttle = CachedThrottle;
+		Intent.Turn = CachedTurn;
+		FVector RayOrigin;
+		FVector RayDirection;
+		if (DeprojectMousePositionToWorld(RayOrigin, RayDirection))
+		{
+			Intent.bHasAimWorldPoint = NetworkTankArena::LocalTank::TryIntersectAimPlane(
+				RayOrigin, RayDirection, Tank->GetGameplayPlaneZ(), Intent.AimWorldPoint);
+		}
+	}
+	else
+	{
+		ClearThrottle();
+		ClearTurn();
+	}
+	if (HasAuthority())
+	{
+		AcceptControlIntent(Tank, Intent); // Listen host/standalone uses the same acceptance path.
+	}
+	else if (NetworkTankArena::LocalTank::IsValidDeltaTime(DeltaTime))
+	{
+		SecondsUntilInputSend -= DeltaTime;
+		if (SecondsUntilInputSend <= UE_SMALL_NUMBER)
+		{
+			SubmitLocalControlIntent(Tank, Intent);
+			// No catch-up burst after a slow frame. Send full current state even when neutral.
+			SecondsUntilInputSend = InputSendIntervalSeconds;
+		}
+	}
+}
+
+void ATankPlayerController::SubmitLocalControlIntent(ATankPawn* Tank, const FTankControlIntent& Intent)
+{
+	if (IsLocalController() && IsValid(Tank) && GetPawn() == Tank && Tank->GetController() == this)
+	{
+		ServerSubmitControlIntent(Tank, NetworkTankArena::LocalTank::SanitizeIntent(Intent));
+	}
+}
+
+void ATankPlayerController::ServerSubmitControlIntent_Implementation(ATankPawn* TargetTank, FTankControlIntent Intent)
+{
+	AcceptControlIntent(TargetTank, Intent);
+}
+
+void ATankPlayerController::AcceptControlIntent(ATankPawn* TargetTank, const FTankControlIntent& Intent)
+{
+	// The RPC is routed through the owned controller. Never let its caller name another
+	// player's tank, or let an in-flight update for an old pawn affect a new possession.
+	if (HasAuthority() && IsValid(TargetTank) && TargetTank->HasAuthority()
+		&& GetPawn() == TargetTank && TargetTank->GetController() == this)
+	{
+		TargetTank->SubmitControlIntent(Intent); // Pawn sanitizes again at the authority boundary.
+	}
+}
+
+void ATankPlayerController::AcknowledgePossession(APawn* P)
+{
+	ClearCachedInput();
+	Super::AcknowledgePossession(P);
+	ApplyTankInputContext();
+}
+
+void ATankPlayerController::Reset()
+{
+	ClearCachedInput();
+	RemoveTankInputContext();
+	Super::Reset();
+}
+
+void ATankPlayerController::HostLocalhost()
+{
+	if (IsLocalController() && GetWorld() && GetNetMode() == NM_Standalone)
 	{
 		ClearCachedInput();
-		Tank->SubmitControlIntent(FTankControlIntent{});
-		return;
+		UGameplayStatics::OpenLevel(this, FName(TEXT("/Game/Maps/TestMap")), true, TEXT("listen"));
 	}
+}
 
-	FTankControlIntent Intent;
-	Intent.Throttle = CachedThrottle;
-	Intent.Turn = CachedTurn;
-	FVector RayOrigin;
-	FVector RayDirection;
-	if (DeprojectMousePositionToWorld(RayOrigin, RayDirection))
+void ATankPlayerController::JoinLocalhost()
+{
+	if (IsLocalController() && GetWorld() && GetNetMode() == NM_Standalone)
 	{
-		Intent.bHasAimWorldPoint = NetworkTankArena::LocalTank::TryIntersectAimPlane(
-			RayOrigin, RayDirection, Tank->GetGameplayPlaneZ(), Intent.AimWorldPoint);
+		ClearCachedInput();
+		ClientTravel(TEXT("127.0.0.1:7777"), TRAVEL_Absolute);
 	}
-	Tank->SubmitControlIntent(Intent);
 }
 
 void ATankPlayerController::SetPawn(APawn* InPawn)

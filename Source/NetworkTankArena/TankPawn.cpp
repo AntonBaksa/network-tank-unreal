@@ -6,6 +6,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "Net/UnrealNetwork.h"
 #include "TankGameplayMath.h"
 #include "TankMovementComponent.h"
 
@@ -13,9 +14,12 @@ ATankPawn::ATankPawn()
 {
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.TickGroup = TG_PrePhysics;
-	bReplicates = false;
-	SetReplicatingMovement(false);
+	bReplicates = true;
+	SetReplicatingMovement(true);
+	SetNetUpdateFrequency(20.f);
+	SetMinNetUpdateFrequency(20.f);
 	AutoPossessAI = EAutoPossessAI::Disabled;
+	AutoPossessPlayer = EAutoReceiveInput::Disabled;
 	bUseControllerRotationPitch = false;
 	bUseControllerRotationYaw = false;
 	bUseControllerRotationRoll = false;
@@ -78,8 +82,12 @@ void ATankPawn::BeginPlay()
 {
 	Super::BeginPlay();
 	using namespace NetworkTankArena::LocalTank;
-	CollisionRoot->SetWorldScale3D(FVector::OneVector);
-	CollisionRoot->SetWorldRotation(FRotator(0.0, NormalizeYaw(GetActorRotation().Yaw), 0.0));
+	if (HasAuthority())
+	{
+		CollisionRoot->SetWorldScale3D(FVector::OneVector);
+		CollisionRoot->SetWorldRotation(FRotator(0.0, NormalizeYaw(GetActorRotation().Yaw), 0.0));
+		CanonicalTurretWorldYaw = ResolveTurretWorldYaw(GetActorRotation().Yaw, GetActorLocation(), FTankControlIntent{});
+	}
 	CollisionRoot->SetSimulatePhysics(false);
 	CollisionRoot->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	for (UStaticMeshComponent* Mesh : {ChassisMesh.Get(), TurretMesh.Get(), BarrelMesh.Get()})
@@ -94,19 +102,26 @@ void ATankPawn::BeginPlay()
 	BaseChassisTransform = ChassisVisualPivot->GetRelativeTransform();
 	TankMovement->SetUpdatedComponent(CollisionRoot);
 	TankMovement->InitializeGameplayPlane();
-	CanonicalTurretWorldYaw = ResolveTurretWorldYaw(GetActorRotation().Yaw, GetActorLocation(), FTankControlIntent{});
+	PreviousPresentationYaw = NormalizeYaw(GetActorRotation().Yaw);
 	UpdateControllerTickPrerequisite();
 	ApplyPresentation(0.f);
 }
 
 void ATankPawn::SubmitControlIntent(const FTankControlIntent& Intent)
 {
+	if (!HasAuthority())
+	{
+		return;
+	}
 	CurrentIntent = NetworkTankArena::LocalTank::SanitizeIntent(Intent);
+	ControlIntentAgeSeconds = 0.f;
 }
 
 void ATankPawn::ClearControlIntent()
 {
 	CurrentIntent = FTankControlIntent{};
+	ControlIntentAgeSeconds = 0.f;
+	TankMovement->Velocity = FVector::ZeroVector;
 }
 
 double ATankPawn::GetGameplayPlaneZ() const
@@ -117,15 +132,57 @@ double ATankPawn::GetGameplayPlaneZ() const
 void ATankPawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
-	if (!NetworkTankArena::LocalTank::IsValidDeltaTime(DeltaTime))
+	if (HasAuthority())
 	{
+		if (NetworkTankArena::LocalTank::IsValidDeltaTime(DeltaTime))
+		{
+			ControlIntentAgeSeconds += DeltaTime;
+			if (ControlIntentAgeSeconds >= ControlIntentTimeoutSeconds)
+			{
+				ClearControlIntent();
+			}
+		}
 		TankMovement->SimulateMovement(CurrentIntent, DeltaTime);
-		return;
+		if (NetworkTankArena::LocalTank::IsValidDeltaTime(DeltaTime))
+		{
+			CanonicalTurretWorldYaw = NetworkTankArena::LocalTank::ResolveTurretWorldYaw(
+				CanonicalTurretWorldYaw, GetActorLocation(), CurrentIntent);
+		}
 	}
-	TankMovement->SimulateMovement(CurrentIntent, DeltaTime);
-	CanonicalTurretWorldYaw = NetworkTankArena::LocalTank::ResolveTurretWorldYaw(
-		CanonicalTurretWorldYaw, GetActorLocation(), CurrentIntent);
 	ApplyPresentation(DeltaTime);
+}
+
+void ATankPawn::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ATankPawn, CanonicalTurretWorldYaw);
+}
+
+void ATankPawn::OnRep_CanonicalTurretWorldYaw()
+{
+	// Initial replication can notify before BeginPlay captures Blueprint visual offsets.
+	if (HasActorBegunPlay())
+	{
+		ApplyPresentation(0.f);
+	}
+}
+
+void ATankPawn::PossessedBy(AController* NewController)
+{
+	Super::PossessedBy(NewController);
+	// APawn normally promotes a remote player's pawn to an autonomous proxy.
+	// FRepMovement skips autonomous proxies. With no prediction, ALL client tanks
+	// must be simulated proxies, including the owned tank. Ownership still belongs
+	// to the controller; its Server RPC carries intent for its possessed pawn.
+	SetAutonomousProxy(false);
+	ClearControlIntent();
+}
+
+void ATankPawn::Restart()
+{
+	Super::Restart();
+	ClearControlIntent();
+	UpdateControllerTickPrerequisite();
 }
 
 void ATankPawn::ApplyPresentation(float DeltaTime)
@@ -134,8 +191,14 @@ void ATankPawn::ApplyPresentation(float DeltaTime)
 	if (IsValidDeltaTime(DeltaTime))
 	{
 		HoverPhase = FMath::Fmod(HoverPhase + 2.0 * UE_PI * NonNegativeFinite(HoverFrequencyHz) * DeltaTime, 2.0 * UE_PI);
-		const float TargetBank = -CurrentIntent.Turn * FMath::Min(NonNegativeFinite(MaxBankDegrees), 15.f);
+		// Derive local banking from observed chassis motion on every machine. No intent
+		// or cosmetic transforms need replication; stepped client motion is intentional.
+		const float TurnRate = NonNegativeFinite(TankMovement->GetTurnRateDegreesPerSecond());
+		const float ObservedTurn = TurnRate > UE_SMALL_NUMBER
+			? SanitizeAxis(FMath::FindDeltaAngleDegrees(PreviousPresentationYaw, GetActorRotation().Yaw) / (DeltaTime * TurnRate)) : 0.f;
+		const float TargetBank = -ObservedTurn * FMath::Min(NonNegativeFinite(MaxBankDegrees), 15.f);
 		CurrentBankDegrees = FMath::FInterpTo(CurrentBankDegrees, TargetBank, DeltaTime, NonNegativeFinite(BankInterpSpeed));
+		PreviousPresentationYaw = NormalizeYaw(GetActorRotation().Yaw);
 	}
 	const double Bob = FMath::Sin(HoverPhase) * NonNegativeFinite(HoverAmplitude);
 	VisualRoot->SetRelativeLocation(BaseVisualTransform.GetLocation() + FVector(0.0, 0.0, Bob));

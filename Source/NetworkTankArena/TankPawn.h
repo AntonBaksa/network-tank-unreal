@@ -22,6 +22,9 @@ public:
 	virtual void Tick(float DeltaTime) override;
 	virtual UPawnMovementComponent* GetMovementComponent() const override;
 	virtual void NotifyControllerChanged() override;
+	virtual void PossessedBy(AController* NewController) override;
+	virtual void Restart() override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	void SubmitControlIntent(const FTankControlIntent& Intent);
 	void ClearControlIntent();
@@ -33,6 +36,13 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	friend class FTankMultiplayerAuthorityTest;
+	friend class FTankMultiplayerLifecycleTest;
+	friend class FTankMultiplayerContentTest;
+
+	UFUNCTION()
+	void OnRep_CanonicalTurretWorldYaw();
+
 	void UpdateControllerTickPrerequisite();
 	void ApplyPresentation(float DeltaTime);
 
@@ -67,10 +77,16 @@ private:
 	float BankInterpSpeed = 8.f;
 
 	FTankControlIntent CurrentIntent;
+	// Independent gameplay state: cosmetic component transforms are never replicated.
+	UPROPERTY(ReplicatedUsing = OnRep_CanonicalTurretWorldYaw)
 	float CanonicalTurretWorldYaw = 0.f;
+	// Intent is refreshed by producers, not replicated. Stop if unreliable updates cease.
+	static constexpr float ControlIntentTimeoutSeconds = 0.5f;
+	float ControlIntentAgeSeconds = 0.f;
 	FTransform BaseVisualTransform = FTransform::Identity;
 	FTransform BaseChassisTransform = FTransform::Identity;
 	double HoverPhase = 0.0;
 	float CurrentBankDegrees = 0.f;
+	float PreviousPresentationYaw = 0.f;
 	TWeakObjectPtr<AController> TickController;
 };
