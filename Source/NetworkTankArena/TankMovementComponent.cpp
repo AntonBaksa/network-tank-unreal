@@ -35,8 +35,12 @@ float UTankMovementComponent::GetMaxSpeed() const
 void UTankMovementComponent::SimulateMovement(const FTankControlIntent& Intent, float DeltaTime)
 {
 	using namespace NetworkTankArena::LocalTank;
+	if (!IsValid(PawnOwner) || !PawnOwner->HasAuthority())
+	{
+		return; // Clients consume Actor replication; they never simulate final gameplay transforms.
+	}
 	Velocity = FVector::ZeroVector;
-	if (!IsValid(PawnOwner) || !IsValid(UpdatedPrimitive) || !bGameplayPlaneInitialized
+	if (!IsValid(UpdatedPrimitive) || !bGameplayPlaneInitialized
 		|| !IsValidDeltaTime(DeltaTime) || UpdatedPrimitive->IsSimulatingPhysics())
 	{
 		UpdateComponentVelocity();
