@@ -19,6 +19,9 @@ To run two players locally:
 Movement is server-authoritative without prediction; the client waits for server
 updates, so some input delay and stepped motion are expected.
 
+Thursday Lab 2 starts with [Network conditions](docs/LAB_2_NETWORK_CONDITIONS.md):
+use its PIE setup and impairment profiles to observe this movement baseline.
+
 For a packaged **Development** build, start two copies. In the first copy, open
 the console with tilde and enter `HostLocalhost`. In the second, enter
 `JoinLocalhost`. This uses `127.0.0.1:7777`; start the host before joining.
