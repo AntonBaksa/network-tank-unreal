@@ -3,7 +3,9 @@
 Use **Unreal Engine 5.7.4** and the Windows C++ toolchain required by Unreal.
 Build the project before opening the Editor after C++ changes. This baseline
 covers movement and independent turret aiming. Combat and fire input are
-unavailable; projectiles, health, respawn, score and match state are out of scope.
+unavailable in multiplayer; health, respawn, score and match state are out of scope.
+The pre-Lab 3 [local combat foundation](LOCAL_COMBAT_PARITY.md) runs only in
+one-player standalone and does not change this network-conditions exercise.
 
 The lesson starts by observing latency, then jitter and packet loss, before later
 work on interpolation and prediction. Do not fix the observed delay yet.
