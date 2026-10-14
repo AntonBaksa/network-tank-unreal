@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
 #include "TankControlIntent.h"
+#include "TankInputSequence.h"
 #include "TankPlayerController.generated.h"
 
 class UInputAction;
@@ -41,9 +42,9 @@ private:
 	friend class FTankMultiplayerContentTest;
 
 	UFUNCTION(Server, Unreliable)
-	void ServerSubmitControlIntent(ATankPawn* TargetTank, FTankControlIntent Intent);
+	void ServerSubmitControlIntent(ATankPawn* TargetTank, uint32 Sequence, FTankControlIntent Intent);
 	void SubmitLocalControlIntent(ATankPawn* Tank, const FTankControlIntent& Intent);
-	void AcceptControlIntent(ATankPawn* TargetTank, const FTankControlIntent& Intent);
+	void AcceptControlIntent(ATankPawn* TargetTank, uint32 Sequence, const FTankControlIntent& Intent);
 
 	void UpdateThrottle(const FInputActionValue& Value);
 	void UpdateTurn(const FInputActionValue& Value);
@@ -64,6 +65,10 @@ private:
 	float CachedTurn = 0.f;
 	static constexpr float InputSendIntervalSeconds = 1.f / 20.f;
 	float SecondsUntilInputSend = 0.f;
+	// Never reset on intent clearing, timeout or possession changes. A new controller
+	// creates a fresh stream; uint32 overflow is handled by the acceptance state.
+	uint32 NextMovementIntentSequence = 0;
+	NetworkTankArena::FMovementIntentSequenceState AcceptedMovementIntentSequence;
 	TWeakObjectPtr<UEnhancedInputLocalPlayerSubsystem> MappingSubsystem;
 	UPROPERTY(Transient)
 	TObjectPtr<UInputMappingContext> AppliedMappingContext;
