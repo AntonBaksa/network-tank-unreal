@@ -4,6 +4,7 @@
 #include "GameFramework/PlayerController.h"
 #include "TankControlIntent.h"
 #include "TankInputSequence.h"
+#include "TankCombat.h"
 #include "TankPlayerController.generated.h"
 
 class UInputAction;
@@ -19,8 +20,10 @@ class NETWORKTANKARENA_API ATankPlayerController : public APlayerController
 
 public:
 	virtual void PlayerTick(float DeltaTime) override;
+	virtual void Tick(float DeltaSeconds) override;
 	virtual void SetPawn(APawn* InPawn) override;
 	virtual void FlushPressedKeys() override;
+	virtual void DisableInput(APlayerController* PlayerController) override;
 	virtual void AcknowledgePossession(APawn* P) override;
 	virtual void Reset() override;
 
@@ -34,12 +37,16 @@ protected:
 	virtual void BeginPlay() override;
 	virtual void ReceivedPlayer() override;
 	virtual void SetupInputComponent() override;
+	virtual void PostProcessInput(float DeltaTime, bool bGamePaused) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
 	friend class FTankMultiplayerAuthorityTest;
 	friend class FTankMultiplayerLifecycleTest;
 	friend class FTankMultiplayerContentTest;
+	friend class FTankLocalFireLifecycleTest;
+	friend class FTankLocalFireDisableInputTest;
+	friend class FTankEnhancedFireBindingTest;
 
 	UFUNCTION(Server, Unreliable)
 	void ServerSubmitControlIntent(ATankPawn* TargetTank, uint32 Sequence, FTankControlIntent Intent);
@@ -50,14 +57,24 @@ private:
 	void UpdateTurn(const FInputActionValue& Value);
 	void ClearThrottle();
 	void ClearTurn();
+	void HandleFireStarted();
+	void HandleFireCompleted();
+	void HandleFireCanceled();
 	void ClearCachedInput();
 	void ApplyTankInputContext();
 	void RemoveTankInputContext();
+	bool HasLocalFireControl() const;
+	void InterruptLocalFire();
+	NetworkTankArena::LocalCombat::FFireRequestLatch FireLatch;
+	// Covers the next Enhanced Input processing pass, including synthetic flush events.
+	bool bIgnoreFireInputPass = false;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank|Input")
 	TObjectPtr<UInputAction> ThrottleAction;
 	UPROPERTY(EditDefaultsOnly, Category = "Tank|Input")
 	TObjectPtr<UInputAction> TurnAction;
+	UPROPERTY(EditDefaultsOnly, Category = "Tank|Input")
+	TObjectPtr<UInputAction> FireAction;
 	UPROPERTY(EditDefaultsOnly, Category = "Tank|Input")
 	TObjectPtr<UInputMappingContext> TankMappingContext;
 

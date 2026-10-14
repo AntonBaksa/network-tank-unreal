@@ -9,6 +9,7 @@
 #include "Net/UnrealNetwork.h"
 #include "TankGameplayMath.h"
 #include "TankMovementComponent.h"
+#include "TankWeaponComponent.h"
 
 ATankPawn::ATankPawn()
 {
@@ -71,6 +72,7 @@ ATankPawn::ATankPawn()
 
 	TankMovement = CreateDefaultSubobject<UTankMovementComponent>(TEXT("TankMovement"));
 	TankMovement->SetUpdatedComponent(CollisionRoot);
+	TankWeapon = CreateDefaultSubobject<UTankWeaponComponent>(TEXT("TankWeapon"));
 }
 
 UPawnMovementComponent* ATankPawn::GetMovementComponent() const
@@ -119,6 +121,7 @@ void ATankPawn::SubmitControlIntent(const FTankControlIntent& Intent)
 
 void ATankPawn::ClearControlIntent()
 {
+	TankWeapon->CancelFireRequest();
 	CurrentIntent = FTankControlIntent{};
 	ControlIntentAgeSeconds = 0.f;
 	TankMovement->Velocity = FVector::ZeroVector;
@@ -149,6 +152,7 @@ void ATankPawn::Tick(float DeltaTime)
 				CanonicalTurretWorldYaw, GetActorLocation(), CurrentIntent);
 		}
 	}
+	TankWeapon->ProcessLocalFireRequest();
 	ApplyPresentation(DeltaTime);
 }
 

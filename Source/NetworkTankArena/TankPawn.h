@@ -11,6 +11,7 @@ class UStaticMeshComponent;
 class USpringArmComponent;
 class UCameraComponent;
 class UTankMovementComponent;
+class UTankWeaponComponent;
 
 UCLASS()
 class NETWORKTANKARENA_API ATankPawn : public APawn
@@ -30,6 +31,7 @@ public:
 	void ClearControlIntent();
 	double GetGameplayPlaneZ() const;
 	float GetCanonicalTurretWorldYaw() const { return CanonicalTurretWorldYaw; }
+	UTankWeaponComponent* GetWeaponComponent() const { return TankWeapon; }
 
 protected:
 	virtual void BeginPlay() override;
@@ -66,6 +68,8 @@ private:
 	TObjectPtr<UCameraComponent> FollowCamera;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tank|Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UTankMovementComponent> TankMovement;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tank|Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UTankWeaponComponent> TankWeapon;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Tank|Presentation", meta = (ClampMin = "0", Units = "cm"))
 	float HoverAmplitude = 3.f;
