@@ -1,4 +1,10 @@
-# Local projectile-combat foundation (before Friday Lab 3)
+# Local projectile-combat foundation (historical, before Friday Lab 3)
+
+This document records the standalone foundation and its earlier verification.
+The current implementation evolves it into [authoritative network combat](NETWORK_COMBAT.md).
+Standalone-only guards, the queued weapon API and non-replication assertions below
+describe that earlier foundation, not the current branch. Use NETWORK_COMBAT.md
+for current behavior, automation and acceptance checks.
 
 Use **Unreal Engine 5.7.4**. This contribution adds local combat to the completed
 Lab 2 movement/aim baseline. It does not implement authoritative network combat.

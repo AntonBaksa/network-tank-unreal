@@ -5,13 +5,15 @@ and the Windows C++ toolchain required by Unreal. Open `NetworkTankArena.uprojec
 with UE 5.7.4 and build the project if prompted. The startup level is `TestMap`.
 
 W/S move forward/backward, A/D turn the chassis, and the mouse aims the turret
-independently. In **one-player Play Standalone**, left mouse fires local projectiles
-at a persistent damage-test cube. Enhanced Input is configured through **IA_Fire**,
+independently. Left mouse sends one discrete fire request per fresh press;
+the server fires replicated projectiles at a persistent damage-test cube.
+Enhanced Input is configured through **IA_Fire**,
 the fire mapping in **IMC_Tank**, and **BP_TankPlayerController's Fire Action**.
-The asset setup and local firing behavior have been manually verified in UE 5.7.4.
+The existing asset setup and earlier local firing behavior were manually verified in UE 5.7.4.
 Release the focus-acquiring click before firing; that specific capture behavior
-has not been verified. See [Local combat foundation](docs/LOCAL_COMBAT_PARITY.md)
-for behavior, automation and manual checks. Combat is disabled during multiplayer play.
+has not been verified. See [Authoritative network combat](docs/NETWORK_COMBAT.md)
+for the current contract, automation and manual checks. Network combat and the
+target readout still require manual UE 5.7.4 verification. Tank health is not implemented.
 
 To run two players locally:
 
@@ -27,8 +29,9 @@ updates, so some input delay and stepped motion are expected.
 
 Thursday Lab 2 starts with [Network conditions](docs/LAB_2_NETWORK_CONDITIONS.md):
 use its PIE setup and impairment profiles to observe this movement baseline.
-The local projectile foundation prepares Friday Lab 3; authoritative network
-combat remains a later contribution.
+Friday Lab 3 adds reliable fire requests, server collision/damage, replicated
+projectiles and target totals. Projectile presentation deliberately has no prediction
+or custom interpolation.
 
 For a packaged **Development** build, start two copies. In the first copy, open
 the console with tilde and enter `HostLocalhost`. In the second, enter

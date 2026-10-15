@@ -12,8 +12,13 @@
 ATankProjectile::ATankProjectile()
 {
 	PrimaryActorTick.bCanEverTick = true;
-	bReplicates = false;
-	SetReplicatingMovement(false);
+	bReplicates = true;
+	SetReplicatingMovement(true);
+	bAlwaysRelevant = true;
+	bOnlyRelevantToOwner = false;
+	bNetUseOwnerRelevancy = false;
+	SetNetUpdateFrequency(30.f);
+	SetMinNetUpdateFrequency(30.f);
 	Sphere = CreateDefaultSubobject<USphereComponent>(TEXT("Sphere"));
 	SetRootComponent(Sphere);
 	Sphere->InitSphereRadius(NetworkTankArena::LocalCombat::ProjectileRadius);
@@ -31,10 +36,37 @@ ATankProjectile::ATankProjectile()
 
 void ATankProjectile::Initialize(ATankPawn* Shooter, const FVector& Direction)
 {
+	if (!HasAuthority() || GetNetMode() == NM_Client || !IsValid(Shooter)
+		|| !Shooter->HasAuthority() || Shooter->IsActorBeingDestroyed()) { return; }
 	FiringTank = Shooter;
 	SetOwner(Shooter);
 	Forward = Direction.GetSafeNormal();
 	RemainingLifetime = NetworkTankArena::LocalCombat::ProjectileLifetime;
+	Shooter->OnEndPlay.AddDynamic(this, &ATankProjectile::HandleShooterEndPlay);
+}
+
+void ATankProjectile::BeginPlay()
+{
+	Super::BeginPlay();
+	SetActorTickEnabled(HasAuthority() && GetNetMode() != NM_Client);
+}
+
+void ATankProjectile::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (ATankPawn* Shooter = FiringTank.Get())
+	{
+		Shooter->OnEndPlay.RemoveDynamic(this, &ATankProjectile::HandleShooterEndPlay);
+	}
+	Super::EndPlay(EndPlayReason);
+}
+
+void ATankProjectile::HandleShooterEndPlay(AActor* Actor, EEndPlayReason::Type EndPlayReason)
+{
+	if (HasAuthority() && GetNetMode() != NM_Client)
+	{
+		bTerminal = true;
+		Destroy(); // Shooter despawn is never an impact or damage event.
+	}
 }
 
 bool ATankProjectile::SweepPath(UWorld* World, const FVector& Start, const FVector& End,
@@ -47,10 +79,11 @@ bool ATankProjectile::SweepPath(UWorld* World, const FVector& Start, const FVect
 		FCollisionShape::MakeSphere(NetworkTankArena::LocalCombat::ProjectileRadius), Query);
 }
 
-void ATankProjectile::ApplyLocalHit(const FHitResult& Hit, const FVector& Direction,
+void ATankProjectile::ApplyAuthoritativeHit(const FHitResult& Hit, const FVector& Direction,
 	ATankPawn* Shooter, AActor* DamageCauser)
 {
-	if (IsValid(DamageCauser) && DamageCauser->GetNetMode() == NM_Standalone
+	if (IsValid(DamageCauser) && DamageCauser->HasAuthority() && DamageCauser->GetNetMode() != NM_Client
+		&& IsValid(Shooter) && Shooter->HasAuthority() && !Shooter->IsActorBeingDestroyed()
 		&& IsValid(Hit.GetActor()) && Hit.GetActor() != Shooter)
 	{
 		UGameplayStatics::ApplyPointDamage(Hit.GetActor(), NetworkTankArena::LocalCombat::Damage,
@@ -60,17 +93,17 @@ void ATankProjectile::ApplyLocalHit(const FHitResult& Hit, const FVector& Direct
 
 void ATankProjectile::ResolveHit(const FHitResult& Hit)
 {
-	if (bTerminal) { return; }
+	if (!HasAuthority() || GetNetMode() == NM_Client || bTerminal) { return; }
 	bTerminal = true; // Set before damage callbacks, which may re-enter or destroy actors.
-	ApplyLocalHit(Hit, Forward, FiringTank.Get(), this);
+	ApplyAuthoritativeHit(Hit, Forward, FiringTank.Get(), this);
 	Destroy();
 }
 
 void ATankProjectile::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	if (bTerminal) { return; }
-	if (GetNetMode() != NM_Standalone || RemainingLifetime <= 0.f)
+	if (!HasAuthority() || GetNetMode() == NM_Client || bTerminal) { return; }
+	if (!FiringTank.IsValid() || FiringTank->IsActorBeingDestroyed() || RemainingLifetime <= 0.f)
 	{
 		bTerminal = true;
 		Destroy();
