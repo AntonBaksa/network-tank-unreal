@@ -9,6 +9,7 @@
 #include "Net/UnrealNetwork.h"
 #include "TankGameplayMath.h"
 #include "TankMovementComponent.h"
+#include "TankWeaponComponent.h"
 
 ATankPawn::ATankPawn()
 {
@@ -71,6 +72,7 @@ ATankPawn::ATankPawn()
 
 	TankMovement = CreateDefaultSubobject<UTankMovementComponent>(TEXT("TankMovement"));
 	TankMovement->SetUpdatedComponent(CollisionRoot);
+	TankWeapon = CreateDefaultSubobject<UTankWeaponComponent>(TEXT("TankWeapon"));
 }
 
 UPawnMovementComponent* ATankPawn::GetMovementComponent() const

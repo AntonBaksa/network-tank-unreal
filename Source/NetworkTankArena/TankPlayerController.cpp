@@ -2,14 +2,17 @@
 
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "EnhancedPlayerInput.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/LocalPlayer.h"
+#include "Engine/Console.h"
 #include "InputAction.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
 #include "Kismet/GameplayStatics.h"
 #include "TankGameplayMath.h"
 #include "TankPawn.h"
+#include "TankWeaponComponent.h"
 #include "UnrealClient.h"
 
 void ATankPlayerController::BeginPlay()
@@ -48,6 +51,12 @@ void ATankPlayerController::SetupInputComponent()
 		EnhancedInput->BindAction(TurnAction, ETriggerEvent::Completed, this, &ATankPlayerController::ClearTurn);
 		EnhancedInput->BindAction(TurnAction, ETriggerEvent::Canceled, this, &ATankPlayerController::ClearTurn);
 	}
+	if (FireAction)
+	{
+		EnhancedInput->BindAction(FireAction, ETriggerEvent::Started, this, &ATankPlayerController::HandleFireStarted);
+		EnhancedInput->BindAction(FireAction, ETriggerEvent::Completed, this, &ATankPlayerController::HandleFireCompleted);
+		EnhancedInput->BindAction(FireAction, ETriggerEvent::Canceled, this, &ATankPlayerController::HandleFireCanceled);
+	}
 }
 
 void ATankPlayerController::UpdateThrottle(const FInputActionValue& Value)
@@ -74,6 +83,7 @@ void ATankPlayerController::ClearTurn()
 
 void ATankPlayerController::ClearCachedInput()
 {
+	InterruptLocalFire();
 	ClearThrottle();
 	ClearTurn();
 	SecondsUntilInputSend = 0.f;
@@ -93,8 +103,18 @@ void ATankPlayerController::ClearCachedInput()
 
 void ATankPlayerController::FlushPressedKeys()
 {
+	// UEnhancedPlayerInput can emit Completed from the synthetic key release.
+	HandleFireCanceled();
+	bIgnoreFireInputPass = true;
 	Super::FlushPressedKeys();
 	ClearCachedInput();
+}
+
+void ATankPlayerController::DisableInput(APlayerController* PlayerController)
+{
+	Super::DisableInput(PlayerController);
+	// Disabling controller input does not flush keys or cancel our pending local press.
+	if (!InputEnabled()) { InterruptLocalFire(); }
 }
 
 void ATankPlayerController::PlayerTick(float DeltaTime)
@@ -103,6 +123,7 @@ void ATankPlayerController::PlayerTick(float DeltaTime)
 	ATankPawn* Tank = Cast<ATankPawn>(GetPawn());
 	if (!IsLocalController() || !IsValid(Tank) || Tank->GetController() != this)
 	{
+		InterruptLocalFire();
 		return;
 	}
 	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
@@ -139,6 +160,88 @@ void ATankPlayerController::PlayerTick(float DeltaTime)
 			SecondsUntilInputSend = InputSendIntervalSeconds;
 		}
 	}
+	DispatchPendingFire(Intent);
+}
+
+void ATankPlayerController::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	// APlayerController calls actor Tick during pause even when it skips PlayerTick.
+	if (!HasLocalFireControl()) { InterruptLocalFire(); }
+}
+
+bool ATankPlayerController::HasLocalFireControl() const
+{
+	const ATankPawn* Tank = Cast<ATankPawn>(GetPawn());
+	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	UGameViewportClient* ViewportClient = LocalPlayer ? LocalPlayer->ViewportClient : nullptr;
+	const FViewport* Viewport = ViewportClient ? ViewportClient->Viewport : nullptr;
+	return InputEnabled() && IsLocalController() && GetNetMode() != NM_DedicatedServer && IsValid(Tank)
+		&& Tank->GetController() == this && Viewport && Viewport->HasFocus()
+		&& !ViewportClient->IgnoreInput()
+		&& (!ViewportClient->ViewportConsole || !ViewportClient->ViewportConsole->ConsoleActive())
+		&& !IsPaused() && !IsMoveInputIgnored() && !IsLookInputIgnored();
+}
+
+void ATankPlayerController::InterruptLocalFire()
+{
+	FireLatch.Interrupt();
+	PendingFireTank.Reset();
+}
+
+void ATankPlayerController::HandleFireStarted()
+{
+	if (bIgnoreFireInputPass || !HasLocalFireControl())
+	{
+		InterruptLocalFire();
+		return;
+	}
+	if (FireLatch.Press())
+	{
+		PendingFireTank = CastChecked<ATankPawn>(GetPawn());
+	}
+}
+
+void ATankPlayerController::HandleFireCompleted()
+{
+	if (!bIgnoreFireInputPass && HasLocalFireControl())
+	{
+		FireLatch.Release();
+	}
+	else
+	{
+		InterruptLocalFire();
+	}
+}
+
+void ATankPlayerController::HandleFireCanceled()
+{
+	InterruptLocalFire();
+	FireLatch.InvalidateActionValue();
+}
+
+void ATankPlayerController::PostProcessInput(float DeltaTime, bool bGamePaused)
+{
+	Super::PostProcessInput(DeltaTime, bGamePaused);
+	if (bGamePaused || !HasLocalFireControl())
+	{
+		InterruptLocalFire();
+	}
+	else if (!bIgnoreFireInputPass && FireAction && FireAction->ValueType == EInputActionValueType::Boolean)
+	{
+		if (const UEnhancedPlayerInput* EnhancedInput = Cast<UEnhancedPlayerInput>(PlayerInput))
+		{
+			if (const FInputActionInstance* Action = EnhancedInput->FindActionInstanceData(FireAction))
+			{
+				// An absent/canceled action is not evidence of a physical release.
+				if (Action->GetTriggerEvent() != ETriggerEvent::Canceled)
+				{
+					FireLatch.ObserveActionValue(Action->GetValue().Get<bool>());
+				}
+			}
+		}
+	}
+	bIgnoreFireInputPass = false;
 }
 
 void ATankPlayerController::SubmitLocalControlIntent(ATankPawn* Tank, const FTankControlIntent& Intent)
@@ -155,6 +258,45 @@ void ATankPlayerController::SubmitLocalControlIntent(ATankPawn* Tank, const FTan
 			ServerSubmitControlIntent(Tank, Sequence, NetworkTankArena::LocalTank::SanitizeIntent(Intent));
 		}
 	}
+}
+
+void ATankPlayerController::DispatchPendingFire(const FTankControlIntent& Intent)
+{
+	ATankPawn* Tank = PendingFireTank.Get();
+	PendingFireTank.Reset(); // Invalid aim/control discards this press, without retry.
+	if (Tank && HasLocalFireControl() && Intent.bHasAimWorldPoint)
+	{
+		SubmitLocalFireRequest(Tank, Intent.AimWorldPoint);
+	}
+}
+
+void ATankPlayerController::SubmitLocalFireRequest(ATankPawn* Tank, const FVector& AimWorldPoint)
+{
+	if (!IsLocalController() || !IsValid(Tank) || GetPawn() != Tank || Tank->GetController() != this) { return; }
+	FTankFireRequest Request;
+	Request.RequestSequence = NextFireRequestSequence++;
+	Request.AimWorldPoint = AimWorldPoint;
+	if (HasAuthority()) { AcceptFireRequest(Tank, Request); }
+	else { ServerRequestFire(Tank, Request); }
+}
+
+void ATankPlayerController::ServerRequestFire_Implementation(ATankPawn* FiringTank, FTankFireRequest Request)
+{
+	AcceptFireRequest(FiringTank, Request);
+}
+
+void ATankPlayerController::AcceptFireRequest(ATankPawn* FiringTank, const FTankFireRequest& Request)
+{
+	// The owning connection authenticates this controller. The pawn parameter names
+	// the shooter, not a claimed victim, and cannot redirect a request after possession.
+	if (!HasAuthority() || GetNetMode() == NM_Client || IsActorBeingDestroyed() || !HasActorBegunPlay()
+		|| !GetWorld() || GetWorld()->bIsTearingDown || !IsValid(FiringTank)
+		|| FiringTank->GetWorld() != GetWorld() || !FiringTank->HasAuthority()
+		|| FiringTank->IsActorBeingDestroyed() || !FiringTank->HasActorBegunPlay()
+		|| GetPawn() != FiringTank || FiringTank->GetController() != this || FiringTank->GetOwner() != this
+		|| !AcceptedFireRequestSequence.TryAccept(Request.RequestSequence)) { return; }
+	// A new owner's request is handled once, even when aim/cooldown rejects its shot.
+	FiringTank->GetWeaponComponent()->TryFire(Request.AimWorldPoint);
 }
 
 void ATankPlayerController::ServerSubmitControlIntent_Implementation(ATankPawn* TargetTank, uint32 Sequence, FTankControlIntent Intent)

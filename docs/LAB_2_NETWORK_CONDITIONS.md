@@ -2,8 +2,11 @@
 
 Use **Unreal Engine 5.7.4** and the Windows C++ toolchain required by Unreal.
 Build the project before opening the Editor after C++ changes. This baseline
-covers movement and independent turret aiming. Combat and fire input are
-unavailable; projectiles, health, respawn, score and match state are out of scope.
+covers movement and independent turret aiming. The original Lab 2 version had
+no multiplayer combat; the current branch also includes [Lab 3 combat](NETWORK_COMBAT.md).
+Use movement/aim only for the observations here. Health, respawn, score and match
+state remain out of scope. The earlier [local combat foundation](LOCAL_COMBAT_PARITY.md)
+is retained as historical documentation.
 
 The lesson starts by observing latency, then jitter and packet loss, before later
 work on interpolation and prediction. Do not fix the observed delay yet.
@@ -165,8 +168,8 @@ across PIE sessions. Prefer the Editor settings above for the repeatable lab flo
   emulation commands, and distinguish frame-rate stalls from network effects.
 - Before finishing: both tanks move/aim in both windows; ownership is correct;
   focus loss stops input; repeated PIE works; clean conditions are restored.
-  Record delayed/stepped behavior before attempting later solutions. Combat is
-  still unavailable in this baseline.
+  Record delayed/stepped behavior before attempting later solutions. Use the
+  separate Lab 3 checklist when verifying current network combat.
 
 Engine reference: [UE 5.7 Network Emulation](https://dev.epicgames.com/documentation/en-us/unreal-engine/using-network-emulation-in-unreal-engine?application_version=5.7)
 and [PIE multiplayer options](https://dev.epicgames.com/documentation/en-us/unreal-engine/play-in-editor-multiplayer-options-in-unreal-engine?application_version=5.7).

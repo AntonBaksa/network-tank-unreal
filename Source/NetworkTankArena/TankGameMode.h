@@ -12,4 +12,9 @@ class NETWORKTANKARENA_API ATankGameMode : public AGameModeBase
 
 public:
 	ATankGameMode();
+	virtual void StartPlay() override;
+
+private:
+	UPROPERTY(EditDefaultsOnly, Category = "Tank|Combat Test")
+	FVector DamageTargetLocation = FVector(0.0, 500.0, 100.0);
 };
