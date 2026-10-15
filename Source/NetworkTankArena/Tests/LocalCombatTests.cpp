@@ -19,6 +19,7 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedPlayerInput.h"
 #include "InputAction.h"
+#include "InputMappingContext.h"
 #include "InputTriggers.h"
 #include "Misc/AutomationTest.h"
 #include <limits>
@@ -223,10 +224,10 @@ bool FTankLocalFireLifecycleTest::RunTest(const FString& Parameters)
 	Controller->SetAsLocalPlayerController();
 	Controller->Possess(Tank);
 	Controller->FireLatch.Release();
-	Tank->GetWeaponComponent()->RequestLocalFire();
+	Controller->PendingFireTank = Tank;
 	Controller->FlushPressedKeys();
 	TestFalse(TEXT("Key flush cannot synthesize a fire release"), Controller->FireLatch.Press());
-	Tank->GetWeaponComponent()->ProcessLocalFireRequest();
+	TestFalse(TEXT("Key flush clears pending local press"), Controller->PendingFireTank.IsValid());
 	TestEqual(TEXT("Key flush cancels pending shot"), Scope.ProjectileCount(), 0);
 	Controller->HandleFireCompleted(); // No viewport/focus in this transient world.
 	TestFalse(TEXT("Release without local focus/control cannot rearm"), Controller->FireLatch.Press());
@@ -244,10 +245,10 @@ bool FTankLocalFireLifecycleTest::RunTest(const FString& Parameters)
 	Controller->Possess(Tank); // Reset can unpossess; pause must exercise the currently controlled tank.
 	TestTrue(TEXT("Pause fixture has current possession"), Controller->GetPawn() == Tank);
 	Controller->FireLatch.Release();
-	Tank->GetWeaponComponent()->RequestLocalFire();
+	Controller->PendingFireTank = Tank;
 	Controller->TickActor(0.01f, LEVELTICK_PauseTick, Controller->PrimaryActorTick);
 	TestFalse(TEXT("Pause actor-tick path interrupts even without PlayerTick"), Controller->FireLatch.Press());
-	Tank->GetWeaponComponent()->ProcessLocalFireRequest();
+	TestFalse(TEXT("Pause tick clears pending local press"), Controller->PendingFireTank.IsValid());
 	TestEqual(TEXT("Pause tick cancels pending shot"), Scope.ProjectileCount(), 0);
 	Controller->FireLatch.Release();
 	Controller->HandleFireCanceled();
@@ -267,21 +268,19 @@ bool FTankLocalFireDisableInputTest::RunTest(const FString& Parameters)
 	{
 		FScopedCombatWorld Scope;
 		ATankPawn* Tank = Scope.Spawn<ATankPawn>(FVector(0.0, 0.0, 100.0));
-		ATankPlayerController* Controller = Scope.World->SpawnActor<ATankPlayerController>();
+		ATankPlayerController* Controller = Scope.Spawn<ATankPlayerController>();
 		Controller->SetAsLocalPlayerController();
 		Controller->Possess(Tank);
-		UTankWeaponComponent* Weapon = Tank->GetWeaponComponent();
-		// No viewport in this fixture: exercise the latch/weapon boundary of a valid Started.
+		// No viewport: exercise the local pending-press boundary of a valid Started.
 		Controller->FireLatch.ObserveActionValue(false);
 		if (!TestTrue(TEXT("Fresh press accepted before disable"), Controller->FireLatch.Press())) { return false; }
-		Weapon->RequestLocalFire();
+		Controller->PendingFireTank = Tank;
 		Controller->CachedThrottle = 0.75f;
 		Controller->CachedTurn = -0.25f;
 		Controller->DisableInput(bNullController ? nullptr : Controller);
 		TestFalse(TEXT("Engine controller input is disabled"), Controller->InputEnabled());
 		TestFalse(TEXT("Disabled controller has no local fire control"), Controller->HasLocalFireControl());
-		// Consume immediately, before any controller tick can provide fallback cancellation.
-		Weapon->ProcessLocalFireRequest();
+		TestFalse(TEXT("DisableInput clears pending press before dispatch"), Controller->PendingFireTank.IsValid());
 		TestEqual(TEXT("DisableInput immediately cancels pending shot"), Scope.ProjectileCount(), 0);
 		TestFalse(TEXT("DisableInput suppresses held fire"), Controller->FireLatch.Press());
 		TestEqual(TEXT("Fire interruption preserves cached throttle"), Controller->CachedThrottle, 0.75f);
@@ -290,16 +289,13 @@ bool FTankLocalFireDisableInputTest::RunTest(const FString& Parameters)
 		Controller->EnableInput(bNullController ? nullptr : Controller);
 		TestTrue(TEXT("Engine controller input is enabled again"), Controller->InputEnabled());
 		Controller->FireLatch.ObserveActionValue(true);
-		if (Controller->FireLatch.Press()) { Weapon->RequestLocalFire(); }
-		Weapon->ProcessLocalFireRequest();
+		if (Controller->FireLatch.Press()) { Controller->SubmitLocalFireRequest(Tank, FVector(1000.0, 0.0, 100.0)); }
 		TestEqual(TEXT("Re-enable while held produces no shot"), Scope.ProjectileCount(), 0);
 		Controller->FireLatch.ObserveActionValue(false);
 		if (!TestTrue(TEXT("Genuine neutral rearms next fresh press"), Controller->FireLatch.Press())) { return false; }
-		Weapon->RequestLocalFire();
-		Weapon->ProcessLocalFireRequest();
+		Controller->SubmitLocalFireRequest(Tank, FVector(1000.0, 0.0, 100.0));
 		TestEqual(TEXT("Fresh press after release produces exactly one shot"), Scope.ProjectileCount(), 1);
 		TestFalse(TEXT("Held press cannot request another shot"), Controller->FireLatch.Press());
-		Weapon->ProcessLocalFireRequest();
 		TestEqual(TEXT("Consumed request cannot fire twice"), Scope.ProjectileCount(), 1);
 	}
 	return true;
@@ -357,7 +353,7 @@ bool FTankLocalProjectileTest::RunTest(const FString& Parameters)
 		return Projectile;
 	};
 	ATankProjectile* Travel = Launch(FVector::ZeroVector, FVector::ForwardVector);
-	TestFalse(TEXT("Projectile is not replicated"), Travel->GetIsReplicated() || Travel->IsReplicatingMovement());
+	TestTrue(TEXT("Projectile and movement replicate"), Travel->GetIsReplicated() && Travel->IsReplicatingMovement());
 	TestEqual(TEXT("Collision radius is 10 cm"), Travel->Sphere->GetUnscaledSphereRadius(), 10.f);
 	Travel->Tick(0.1f);
 	TestTrue(TEXT("2000 cm/s, no gravity; shooter at origin ignored"), Travel->GetActorLocation().Equals(FVector(200.0, 0.0, 0.0), 0.001));
@@ -404,47 +400,43 @@ bool FTankLocalWeaponTest::RunTest(const FString& Parameters)
 	UTankWeaponComponent* Weapon = Tank->GetWeaponComponent();
 	ATankDamageTestTarget* Cover = Scope.Spawn<ATankDamageTestTarget>(FVector(60.0, 0.0, 75.0));
 	CastChecked<UBoxComponent>(Cover->GetRootComponent())->SetBoxExtent(FVector(1.0, 50.0, 50.0));
-	Weapon->RequestLocalFire();
-	Tank->Tick(0.01f);
+	const FVector ForwardAim(1000.0, 0.0, 100.0);
+	Weapon->TryFire(ForwardAim);
 	TestEqual(TEXT("Blocked launch resolves obstruction"), Cover->HitCount, 1);
 	TestEqual(TEXT("Blocked launch damage is 25"), Cover->TotalDamage, 25.f);
 	TestEqual(TEXT("Blocked launch never spawns beyond cover"), Scope.ProjectileCount(), 0);
-	Weapon->RequestLocalFire();
-	Weapon->ProcessLocalFireRequest();
+	Weapon->TryFire(ForwardAim);
 	TestEqual(TEXT("Blocked shot consumed cooldown"), Cover->HitCount, 1);
 	Scope.World->Tick(LEVELTICK_All, 0.31f);
-	Weapon->ProcessLocalFireRequest();
 	TestEqual(TEXT("Early rejected request is not buffered"), Cover->HitCount, 1);
 	// Start overlapping the sphere at turret origin; must not escape through cover.
 	Cover->SetActorLocation(Weapon->GetFiringPose().TurretOrigin);
-	Weapon->RequestLocalFire();
-	Weapon->ProcessLocalFireRequest();
+	Weapon->TryFire(ForwardAim);
 	TestEqual(TEXT("Initial overlap also resolves obstruction"), Cover->HitCount, 2);
 	TestEqual(TEXT("Initial overlap spawns no projectile"), Scope.ProjectileCount(), 0);
 	Cover->Destroy();
 	Scope.World->Tick(LEVELTICK_All, 0.31f);
-	Weapon->RequestLocalFire();
 	FTankControlIntent Aim;
 	Aim.bHasAimWorldPoint = true;
 	Aim.AimWorldPoint = FVector(0.0, 1000.0, 100.0);
 	Tank->SubmitControlIntent(Aim);
 	Tank->Tick(0.01f);
+	const float CanonicalBefore = Tank->GetCanonicalTurretWorldYaw();
+	Weapon->TryFire(ForwardAim); // Intentionally differs from the continuous canonical aim.
 	TestEqual(TEXT("Clear launch spawns exactly one projectile"), Scope.ProjectileCount(), 1);
 	for (TActorIterator<ATankProjectile> It(Scope.World); It; ++It)
 	{
-		TestTrue(TEXT("Shot uses canonical aim updated in the same pawn tick"), It->Forward.Equals(FVector::RightVector));
-		TestTrue(TEXT("Spawned at canonical muzzle"), It->GetActorLocation().Equals(Weapon->GetFiringPose().Muzzle));
+		TestTrue(TEXT("Shot uses explicit authoritative aim snapshot"), It->Forward.Equals(FVector::ForwardVector));
+		TestTrue(TEXT("Spawned at snapshot muzzle"), It->GetActorLocation().Equals(Weapon->GetFiringPose(0.f).Muzzle));
 	}
+	TestEqual(TEXT("Shot leaves continuous canonical turret yaw unchanged"), Tank->GetCanonicalTurretWorldYaw(), CanonicalBefore);
 	Tank->Tick(0.1f);
 	TestEqual(TEXT("Request is consumed once"), Scope.ProjectileCount(), 1);
 	Scope.World->Tick(LEVELTICK_All, 0.31f);
-	Weapon->RequestLocalFire();
 	Tank->ClearControlIntent();
-	Weapon->ProcessLocalFireRequest();
-	TestEqual(TEXT("Control clear cancels queued fire"), Scope.ProjectileCount(), 1);
+	TestEqual(TEXT("Control clear has no queued fire to replay"), Scope.ProjectileCount(), 1);
 	Tank->SetRole(ROLE_SimulatedProxy);
-	Weapon->RequestLocalFire();
-	Weapon->ProcessLocalFireRequest();
+	Weapon->TryFire(ForwardAim);
 	TestEqual(TEXT("Non-authority cannot fire even in standalone world"), Scope.ProjectileCount(), 1);
 	Tank->SetRole(ROLE_Authority);
 	return true;
@@ -472,7 +464,7 @@ bool FTankLocalTargetTest::RunTest(const FString& Parameters)
 	Target->SetCanBeDamaged(false);
 	TestEqual(TEXT("Respects damage-disabled flag"), Target->TakeDamage(25.f, Event, nullptr, nullptr), 0.f);
 	TestEqual(TEXT("Rejected damage leaves accounting unchanged"), Target->HitCount, 8);
-	TestFalse(TEXT("Target is non-replicated"), Target->GetIsReplicated() || Target->IsReplicatingMovement());
+	TestTrue(TEXT("Target totals replicate, but movement does not"), Target->GetIsReplicated() && !Target->IsReplicatingMovement());
 	return true;
 }
 
@@ -487,25 +479,25 @@ bool FTankLocalCombatNetworkGuardTest::RunTest(const FString& Parameters)
 		FScopedCombatWorld Scope;
 		ATankPawn* Tank = Scope.Spawn<ATankPawn>();
 		ATankDamageTestTarget* Target = Scope.Spawn<ATankDamageTestTarget>(FVector(500.0, 0.0, 0.0));
-		Tank->GetWeaponComponent()->RequestLocalFire();
-		Tank->GetWeaponComponent()->ProcessLocalFireRequest();
+		Tank->GetWeaponComponent()->TryFire(FVector(1000.0, 0.0, 0.0));
 		ATankProjectile* Stray = *TActorIterator<ATankProjectile>(Scope.World);
 		if (!TestNotNull(TEXT("Live initialized standalone projectile before transition"), Stray)) { return false; }
-		Tank->GetWeaponComponent()->RequestLocalFire(); // Pending before a net-mode transition.
 		Scope.World->WorldType = EWorldType::PIE;
 		Scope.World->SetPlayInEditorInitialNetMode(Mode);
 		TestEqual(TEXT("Exercise real world net-mode guard, without transport"), Scope.World->GetNetMode(), Mode);
-		Tank->GetWeaponComponent()->ProcessLocalFireRequest();
-		Tank->GetWeaponComponent()->RequestLocalFire();
-		Tank->GetWeaponComponent()->ProcessLocalFireRequest();
-		TestEqual(TEXT("Network mode spawns no shots, including queued standalone request"), Scope.ProjectileCount(), 1);
-		TestEqual(TEXT("Network target rejects damage"), Target->TakeDamage(25.f, FDamageEvent{}, nullptr, Tank), 0.f);
-		TestEqual(TEXT("No network damage accounting"), Target->HitCount, 0);
+		const bool bServer = Mode != NM_Client;
+		TestEqual(TEXT("Server modes accept target damage; client world rejects it"),
+			Target->TakeDamage(25.f, FDamageEvent{}, nullptr, Tank), bServer ? 25.f : 0.f);
 		FHitResult Hit(Target, CastChecked<UPrimitiveComponent>(Target->GetRootComponent()), Target->GetActorLocation(), -FVector::ForwardVector);
-		ATankProjectile::ApplyLocalHit(Hit, FVector::ForwardVector, Tank, Stray);
-		TestEqual(TEXT("Network mode blocks point-damage dispatch"), Target->HitCount, 0);
+		ATankProjectile::ApplyAuthoritativeHit(Hit, FVector::ForwardVector, Tank, Stray);
+		TestEqual(TEXT("Only server modes dispatch point damage"), Target->HitCount, bServer ? 2 : 0);
+		const FVector Before = Stray->GetActorLocation();
 		Stray->Tick(0.1f);
-		TestTrue(TEXT("Accidental local projectile is removed in network mode"), Stray->IsActorBeingDestroyed());
+		TestEqual(TEXT("Client guard does not locally destroy a replicated projectile"), Stray->IsActorBeingDestroyed(), false);
+		TestEqual(TEXT("Only server modes simulate projectile movement"), Stray->GetActorLocation().Equals(Before), !bServer);
+		Scope.World->Tick(LEVELTICK_All, 0.31f);
+		TestEqual(TEXT("Only server modes can spawn a new shot"),
+			Tank->GetWeaponComponent()->TryFire(FVector(0.0, 1000.0, 0.0)), bServer);
 		Scope.World->WorldType = EWorldType::Game;
 	}
 #endif
@@ -526,7 +518,27 @@ bool FTankLocalCombatContentTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Fixed gameplay turret height"), Weapon->GameplayTurretHeight, -25.f);
 	TestEqual(TEXT("Fixed gameplay muzzle distance"), Weapon->GameplayMuzzleDistance, 110.f);
 	const auto* Controller = Cast<ATankPlayerController>(Mode->PlayerControllerClass->GetDefaultObject());
-	TestNotNull(TEXT("Existing input Blueprint loads"), Controller);
+	if (!TestNotNull(TEXT("Existing input Blueprint loads"), Controller)) { return false; }
+	if (TestNotNull(TEXT("Fire action asset assigned"), Controller->FireAction.Get()))
+	{
+		TestEqual(TEXT("Fire action is Boolean"), Controller->FireAction->ValueType, EInputActionValueType::Boolean);
+		TestTrue(TEXT("Ordinary fire action has no triggers/modifiers"), Controller->FireAction->Triggers.IsEmpty() && Controller->FireAction->Modifiers.IsEmpty());
+		TestFalse(TEXT("Fire does not trigger while paused"), Controller->FireAction->bTriggerWhenPaused);
+	}
+	if (TestNotNull(TEXT("Input mapping context assigned"), Controller->TankMappingContext.Get()))
+	{
+		int32 FireMappings = 0;
+		for (const FEnhancedActionKeyMapping& Mapping : Controller->TankMappingContext->GetMappings())
+		{
+			if (Mapping.Action == Controller->FireAction)
+			{
+				++FireMappings;
+				TestTrue(TEXT("Fire maps Left Mouse Button"), Mapping.Key == EKeys::LeftMouseButton);
+				TestTrue(TEXT("Fire mapping has no triggers/modifiers"), Mapping.Triggers.IsEmpty() && Mapping.Modifiers.IsEmpty());
+			}
+		}
+		TestEqual(TEXT("Exactly one fire mapping"), FireMappings, 1);
+	}
 	return true;
 }
 
@@ -563,7 +575,8 @@ bool FTankLocalCombatFixtureTest::RunTest(const FString& Parameters)
 		Scope.World->WorldType = EWorldType::PIE;
 		Scope.World->SetPlayInEditorInitialNetMode(NetMode);
 		Mode->StartPlay();
-		TestFalse(TEXT("No automatic combat target in network worlds"), !!TActorIterator<ATankDamageTestTarget>(Scope.World));
+		TestEqual(TEXT("Only server worlds create the automatic target"),
+			!!TActorIterator<ATankDamageTestTarget>(Scope.World), NetMode != NM_Client);
 		Scope.World->WorldType = EWorldType::Game;
 	}
 #endif

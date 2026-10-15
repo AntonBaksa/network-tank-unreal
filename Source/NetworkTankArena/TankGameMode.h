@@ -15,6 +15,6 @@ public:
 	virtual void StartPlay() override;
 
 private:
-	UPROPERTY(EditDefaultsOnly, Category = "Tank|Local Combat")
-	FVector LocalDamageTargetLocation = FVector(0.0, 500.0, 100.0);
+	UPROPERTY(EditDefaultsOnly, Category = "Tank|Combat Test")
+	FVector DamageTargetLocation = FVector(0.0, 500.0, 100.0);
 };

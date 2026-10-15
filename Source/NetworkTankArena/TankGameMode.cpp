@@ -18,13 +18,15 @@ ATankGameMode::ATankGameMode()
 
 void ATankGameMode::StartPlay()
 {
-	// A persistent local lab fixture. A placed target replaces this default fixture.
-	// Networked play retains the Lab 2 movement/aim baseline with no combat actors.
-	if (GetNetMode() == NM_Standalone && !TActorIterator<ATankDamageTestTarget>(GetWorld()))
+	// GameMode exists on the server. A placed target replaces this replicated fixture.
+	if (HasAuthority() && GetNetMode() != NM_Client && !TActorIterator<ATankDamageTestTarget>(GetWorld()))
 	{
 		FActorSpawnParameters Params;
 		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButDontSpawnIfColliding;
-		GetWorld()->SpawnActor<ATankDamageTestTarget>(LocalDamageTargetLocation, FRotator::ZeroRotator, Params);
+		if (!GetWorld()->SpawnActor<ATankDamageTestTarget>(DamageTargetLocation, FRotator::ZeroRotator, Params))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Damage test target fixture could not spawn; check map clearance."));
+		}
 	}
 	Super::StartPlay();
 }

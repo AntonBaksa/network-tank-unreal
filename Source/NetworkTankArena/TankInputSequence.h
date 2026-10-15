@@ -5,7 +5,7 @@
 namespace NetworkTankArena
 {
 	// One history per PlayerController lifetime, independent of pawn/input clearing.
-	struct FMovementIntentSequenceState
+	struct FInputSequenceState
 	{
 		bool bHasAcceptedSequence = false;
 		uint32 LastAcceptedSequence = 0;
@@ -25,4 +25,6 @@ namespace NetworkTankArena
 			return true;
 		}
 	};
+	// Movement and fire use distinct instances, never a shared sequence history.
+	using FMovementIntentSequenceState = FInputSequenceState;
 }

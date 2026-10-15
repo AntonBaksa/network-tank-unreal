@@ -11,44 +11,45 @@ UTankWeaponComponent::UTankWeaponComponent()
 	SetIsReplicatedByDefault(false);
 }
 
-void UTankWeaponComponent::RequestLocalFire()
-{
-	if (GetOwner() && GetOwner()->HasAuthority() && GetNetMode() == NM_Standalone)
-	{
-		bFireRequested = true;
-	}
-}
-
 NetworkTankArena::LocalCombat::FFiringPose UTankWeaponComponent::GetFiringPose() const
 {
 	const ATankPawn* Tank = CastChecked<ATankPawn>(GetOwner());
-	return NetworkTankArena::LocalCombat::CalculateFiringPose(Tank->GetActorLocation(),
-		Tank->GetCanonicalTurretWorldYaw(), GameplayTurretHeight, GameplayMuzzleDistance);
+	return GetFiringPose(Tank->GetCanonicalTurretWorldYaw());
 }
 
-void UTankWeaponComponent::ProcessLocalFireRequest()
+NetworkTankArena::LocalCombat::FFiringPose UTankWeaponComponent::GetFiringPose(float ShotWorldYaw) const
 {
-	const bool bRequested = bFireRequested;
-	bFireRequested = false; // Rejected requests are never deferred until the cooldown ends.
+	const ATankPawn* Tank = CastChecked<ATankPawn>(GetOwner());
+	return NetworkTankArena::LocalCombat::CalculateFiringPose(Tank->GetActorLocation(),
+		ShotWorldYaw, GameplayTurretHeight, GameplayMuzzleDistance);
+}
+
+bool UTankWeaponComponent::TryFire(const FVector& AimWorldPoint)
+{
 	ATankPawn* Tank = Cast<ATankPawn>(GetOwner());
-	if (!bRequested || !IsValid(Tank) || !Tank->HasAuthority() || GetNetMode() != NM_Standalone)
+	if (!IsValid(Tank) || !Tank->HasAuthority() || GetNetMode() == NM_Client
+		|| Tank->IsActorBeingDestroyed() || !Tank->HasActorBegunPlay()
+		|| !GetWorld() || GetWorld()->bIsTearingDown)
 	{
-		return;
+		return false;
 	}
+	float ShotYaw;
+	if (!NetworkTankArena::LocalCombat::TryCalculateFireYaw(Tank->GetActorLocation(), AimWorldPoint, ShotYaw)) { return false; }
 	if (!FMath::IsFinite(GameplayTurretHeight) || !FMath::IsFinite(GameplayMuzzleDistance)
-		|| GameplayMuzzleDistance < 0.f) { return; }
-	const auto Pose = GetFiringPose();
+		|| GameplayMuzzleDistance < 0.f) { return false; }
+	// Immutable gameplay snapshot: firing never writes CanonicalTurretWorldYaw.
+	const auto Pose = GetFiringPose(ShotYaw);
 	if (!NetworkTankArena::LocalTank::IsFiniteVector(Pose.Muzzle)
 		|| !NetworkTankArena::LocalTank::IsFiniteVector(Pose.TurretOrigin)
 		|| !NetworkTankArena::LocalTank::IsFiniteVector(Pose.Forward)
-		|| !Cooldown.TryConsume(GetWorld()->GetTimeSeconds())) { return; }
+		|| !Cooldown.TryConsume(GetWorld()->GetTimeSeconds())) { return false; }
 
 	FHitResult Hit;
 	if (ATankProjectile::SweepPath(GetWorld(), Pose.TurretOrigin, Pose.Muzzle, Tank, nullptr, Hit))
 	{
 		// Obstruction consumes the shot and receives its one damage result. Never spawn beyond cover.
-		ATankProjectile::ApplyLocalHit(Hit, Pose.Forward, Tank, Tank);
-		return;
+		ATankProjectile::ApplyAuthoritativeHit(Hit, Pose.Forward, Tank, Tank);
+		return true;
 	}
 	const FTransform Transform(Pose.Forward.Rotation(), Pose.Muzzle);
 	ATankProjectile* Projectile = GetWorld()->SpawnActorDeferred<ATankProjectile>(
@@ -58,4 +59,5 @@ void UTankWeaponComponent::ProcessLocalFireRequest()
 		Projectile->Initialize(Tank, Pose.Forward);
 		Projectile->FinishSpawning(Transform);
 	}
+	return true; // The shot/cooldown is consumed even if spawning failed.
 }

@@ -121,7 +121,6 @@ void ATankPawn::SubmitControlIntent(const FTankControlIntent& Intent)
 
 void ATankPawn::ClearControlIntent()
 {
-	TankWeapon->CancelFireRequest();
 	CurrentIntent = FTankControlIntent{};
 	ControlIntentAgeSeconds = 0.f;
 	TankMovement->Velocity = FVector::ZeroVector;
@@ -152,7 +151,6 @@ void ATankPawn::Tick(float DeltaTime)
 				CanonicalTurretWorldYaw, GetActorLocation(), CurrentIntent);
 		}
 	}
-	TankWeapon->ProcessLocalFireRequest();
 	ApplyPresentation(DeltaTime);
 }
 

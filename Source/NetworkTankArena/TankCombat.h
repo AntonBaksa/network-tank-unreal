@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "TankGameplayMath.h"
 
 namespace NetworkTankArena::LocalCombat
 {
@@ -9,6 +10,18 @@ namespace NetworkTankArena::LocalCombat
 	inline constexpr float ProjectileRadius = 10.f;
 	inline constexpr float ProjectileLifetime = 3.f;
 	inline constexpr float Damage = 25.f;
+	inline constexpr double MaxAimDistance = 100000.0;
+
+	inline bool TryCalculateFireYaw(const FVector& GameplayPosition, const FVector& AimWorldPoint, float& OutYaw)
+	{
+		using namespace NetworkTankArena::LocalTank;
+		if (!IsFiniteVector(GameplayPosition) || !IsFiniteVector(AimWorldPoint)) { return false; }
+		const FVector Delta = AimWorldPoint - GameplayPosition;
+		// Bound components before squaring, including finite values near double overflow.
+		if (!IsFiniteVector(Delta) || Delta.GetAbsMax() > MaxAimDistance
+			|| Delta.SizeSquared() > MaxAimDistance * MaxAimDistance) { return false; }
+		return TryCalculateAimYaw(GameplayPosition, AimWorldPoint, OutYaw);
+	}
 
 	// Enhanced Input Started requests a shot; trusted release/neutral rearms it.
 	struct FFireRequestLatch

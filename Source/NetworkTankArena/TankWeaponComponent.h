@@ -11,11 +11,10 @@ class NETWORKTANKARENA_API UTankWeaponComponent : public UActorComponent
 	GENERATED_BODY()
 public:
 	UTankWeaponComponent();
-	void RequestLocalFire();
-	void CancelFireRequest() { bFireRequested = false; }
-	// Called by the pawn after this frame's gameplay movement and canonical aim.
-	void ProcessLocalFireRequest();
+	// Synchronous server processing. No cooldown retry or queued gameplay request.
+	bool TryFire(const FVector& AimWorldPoint);
 	NetworkTankArena::LocalCombat::FFiringPose GetFiringPose() const;
+	NetworkTankArena::LocalCombat::FFiringPose GetFiringPose(float ShotWorldYaw) const;
 
 private:
 	friend class FTankLocalWeaponTest;
@@ -26,5 +25,4 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "Tank|Weapon", meta = (ClampMin = "0", Units = "cm"))
 	float GameplayMuzzleDistance = 110.f;
 	NetworkTankArena::LocalCombat::FWeaponCooldown Cooldown;
-	bool bFireRequested = false;
 };
