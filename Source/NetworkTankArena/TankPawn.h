@@ -12,6 +12,7 @@ class USpringArmComponent;
 class UCameraComponent;
 class UTankMovementComponent;
 class UTankWeaponComponent;
+class UMaterialInterface;
 
 UCLASS()
 class NETWORKTANKARENA_API ATankPawn : public APawn
@@ -93,4 +94,33 @@ private:
 	float CurrentBankDegrees = 0.f;
 	float PreviousPresentationYaw = 0.f;
 	TWeakObjectPtr<AController> TickController;
+	
+public:
+	UPROPERTY(EditAnywhere, Category = "Damage")
+	TObjectPtr<UMaterialInterface> DamageMaterial;
+	
+	UPROPERTY(EditDefaultsOnly, Category = "Health")
+	float MaxHealth = 100.f;
+	
+	UPROPERTY(ReplicatedUsing = OnRep_Health)
+	int32 Health = 100;
+	
+	UPROPERTY(EditDefaultsOnly, Category = "Damage")
+	float DamageFlashDuration = 0.5f;
+	
+	UFUNCTION()
+	void OnRep_Health();
+	
+	virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator, AActor* DamageCauser) override;
+	
+private:
+	void Die();
+	void StartDamageFlash();
+	void EndDamageFlash();
+	
+	UPROPERTY()
+	TArray<TObjectPtr<UMaterialInterface>> OriginalMaterials;
+	
+	UPROPERTY()
+	FTimerHandle DamageFlashTimer;
 };

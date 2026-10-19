@@ -1,5 +1,9 @@
 #include "TankPawn.h"
 
+#include <ThirdParty/OpenSubdiv/Deploy/OpenSubdiv-3.7.0/include/opensubdiv/far/types.h>
+
+#include "RHIStats.h"
+#include "RHIStats.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
@@ -10,6 +14,8 @@
 #include "TankGameplayMath.h"
 #include "TankMovementComponent.h"
 #include "TankWeaponComponent.h"
+#include "Materials/MaterialInterface.h"
+
 
 ATankPawn::ATankPawn()
 {
@@ -107,6 +113,14 @@ void ATankPawn::BeginPlay()
 	PreviousPresentationYaw = NormalizeYaw(GetActorRotation().Yaw);
 	UpdateControllerTickPrerequisite();
 	ApplyPresentation(0.f);
+	
+	for (UStaticMeshComponent* Mesh : {ChassisMesh.Get(), TurretMesh.Get(), BarrelMesh.Get()})
+	{
+		for (int32 i = 0; i < Mesh->GetNumMaterials(); i++)
+		{
+			OriginalMaterials.Add(Mesh->GetMaterial(i));
+		}
+	}
 }
 
 void ATankPawn::SubmitControlIntent(const FTankControlIntent& Intent)
@@ -157,7 +171,9 @@ void ATankPawn::Tick(float DeltaTime)
 void ATankPawn::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	
 	DOREPLIFETIME(ATankPawn, CanonicalTurretWorldYaw);
+	DOREPLIFETIME(ATankPawn, Health);
 }
 
 void ATankPawn::OnRep_CanonicalTurretWorldYaw()
@@ -238,5 +254,66 @@ void ATankPawn::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		RemoveTickPrerequisiteActor(Previous);
 	}
 	TickController.Reset();
+	GetWorldTimerManager().ClearTimer(DamageFlashTimer);
 	Super::EndPlay(EndPlayReason);
+}
+
+float ATankPawn::TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator, AActor* DamageCauser)
+{
+	if (!HasAuthority() || DamageAmount <= 0.f)
+	{
+		return 0.f;
+	}
+	
+	Health -= DamageAmount;
+	OnRep_Health();
+	
+	if (Health <= 0)
+	{
+		Die();
+	}
+	
+	return DamageAmount;
+}
+
+void ATankPawn::OnRep_Health()
+{
+	UE_LOG(LogTemp, Display, TEXT("%s health: %d"), *GetName(), Health);
+	StartDamageFlash();
+}
+
+void ATankPawn::Die()
+{
+	SetActorHiddenInGame(true);
+}
+
+void ATankPawn::StartDamageFlash()
+{
+	if (!DamageMaterial) return;
+	
+	for (UStaticMeshComponent* Mesh : {ChassisMesh.Get(), TurretMesh.Get(), BarrelMesh.Get()})
+	{
+		for (int32 i = 0; i < Mesh->GetNumMaterials(); i++)
+		{
+			Mesh->SetMaterial(i, DamageMaterial);
+		}
+	}
+	GetWorldTimerManager().SetTimer(DamageFlashTimer, this, &ATankPawn::EndDamageFlash, DamageFlashDuration, false);
+}
+
+void ATankPawn::EndDamageFlash()
+{
+	int32 Index = 0;
+	for (UStaticMeshComponent* Mesh : {ChassisMesh.Get(), TurretMesh.Get(), BarrelMesh.Get()})
+	{
+		for (int32 i = 0; i < Mesh->GetNumMaterials(); i++)
+		{
+			if (OriginalMaterials.IsValidIndex(Index))
+			{
+				Mesh->SetMaterial(i, OriginalMaterials[Index]);
+			}
+			
+			Index++;
+		}
+	}
 }
