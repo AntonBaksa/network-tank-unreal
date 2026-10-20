@@ -1,9 +1,5 @@
 #include "TankPawn.h"
 
-#include <ThirdParty/OpenSubdiv/Deploy/OpenSubdiv-3.7.0/include/opensubdiv/far/types.h>
-
-#include "RHIStats.h"
-#include "RHIStats.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
@@ -14,6 +10,7 @@
 #include "TankGameplayMath.h"
 #include "TankMovementComponent.h"
 #include "TankWeaponComponent.h"
+#include "TimerManager.h"
 #include "Materials/MaterialInterface.h"
 
 
@@ -125,7 +122,7 @@ void ATankPawn::BeginPlay()
 
 void ATankPawn::SubmitControlIntent(const FTankControlIntent& Intent)
 {
-	if (!HasAuthority())
+	if (!HasAuthority() || bIsDead)
 	{
 		return;
 	}
@@ -150,19 +147,22 @@ void ATankPawn::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 	if (HasAuthority())
 	{
-		if (NetworkTankArena::LocalTank::IsValidDeltaTime(DeltaTime))
+		if (!bIsDead)
 		{
-			ControlIntentAgeSeconds += DeltaTime;
-			if (ControlIntentAgeSeconds >= ControlIntentTimeoutSeconds)
+			if (NetworkTankArena::LocalTank::IsValidDeltaTime(DeltaTime))
 			{
-				ClearControlIntent();
+				ControlIntentAgeSeconds += DeltaTime;
+				if (ControlIntentAgeSeconds >= ControlIntentTimeoutSeconds)
+				{
+					ClearControlIntent();
+				}
 			}
-		}
-		TankMovement->SimulateMovement(CurrentIntent, DeltaTime);
-		if (NetworkTankArena::LocalTank::IsValidDeltaTime(DeltaTime))
-		{
-			CanonicalTurretWorldYaw = NetworkTankArena::LocalTank::ResolveTurretWorldYaw(
-				CanonicalTurretWorldYaw, GetActorLocation(), CurrentIntent);
+			TankMovement->SimulateMovement(CurrentIntent, DeltaTime);
+			if (NetworkTankArena::LocalTank::IsValidDeltaTime(DeltaTime))
+			{
+				CanonicalTurretWorldYaw = NetworkTankArena::LocalTank::ResolveTurretWorldYaw(
+					CanonicalTurretWorldYaw, GetActorLocation(), CurrentIntent);
+			}
 		}
 	}
 	ApplyPresentation(DeltaTime);
@@ -255,6 +255,7 @@ void ATankPawn::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 	TickController.Reset();
 	GetWorldTimerManager().ClearTimer(DamageFlashTimer);
+	GetWorldTimerManager().ClearTimer(RespawnTimer);
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -278,13 +279,15 @@ float ATankPawn::TakeDamage(float DamageAmount, struct FDamageEvent const& Damag
 
 void ATankPawn::OnRep_Health()
 {
-	UE_LOG(LogTemp, Display, TEXT("%s health: %d"), *GetName(), Health);
 	StartDamageFlash();
 }
 
 void ATankPawn::Die()
 {
+	bIsDead = true;
 	SetActorHiddenInGame(true);
+	SetActorEnableCollision(false);
+	GetWorldTimerManager().SetTimer(RespawnTimer, this, &ATankPawn::Respawn, RespawnDelay, false);
 }
 
 void ATankPawn::StartDamageFlash()
@@ -316,4 +319,12 @@ void ATankPawn::EndDamageFlash()
 			Index++;
 		}
 	}
+}
+
+void ATankPawn::Respawn()
+{
+	SetActorHiddenInGame(false);
+	SetActorEnableCollision(true);
+	Health = MaxHealth;
+	bIsDead = false;
 }

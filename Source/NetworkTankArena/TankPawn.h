@@ -106,7 +106,10 @@ public:
 	int32 Health = 100;
 	
 	UPROPERTY(EditDefaultsOnly, Category = "Damage")
-	float DamageFlashDuration = 0.5f;
+	float DamageFlashDuration = 0.3f;
+	
+	UPROPERTY(EditDefaultsOnly, Category = "Respawn")
+	float RespawnDelay = 5.f;
 	
 	UFUNCTION()
 	void OnRep_Health();
@@ -117,10 +120,15 @@ private:
 	void Die();
 	void StartDamageFlash();
 	void EndDamageFlash();
+	void Respawn();
+	
+	bool bIsDead = false;
 	
 	UPROPERTY()
 	TArray<TObjectPtr<UMaterialInterface>> OriginalMaterials;
 	
 	UPROPERTY()
 	FTimerHandle DamageFlashTimer;
+	UPROPERTY()
+	FTimerHandle RespawnTimer;
 };
