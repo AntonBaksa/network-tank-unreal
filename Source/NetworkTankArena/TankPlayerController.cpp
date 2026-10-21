@@ -292,7 +292,7 @@ void ATankPlayerController::AcceptFireRequest(ATankPawn* FiringTank, const FTank
 	if (!HasAuthority() || GetNetMode() == NM_Client || IsActorBeingDestroyed() || !HasActorBegunPlay()
 		|| !GetWorld() || GetWorld()->bIsTearingDown || !IsValid(FiringTank)
 		|| FiringTank->GetWorld() != GetWorld() || !FiringTank->HasAuthority()
-		|| FiringTank->IsActorBeingDestroyed() || !FiringTank->HasActorBegunPlay()
+		|| FiringTank->IsActorBeingDestroyed() || !FiringTank->HasActorBegunPlay() || FiringTank->bIsDead
 		|| GetPawn() != FiringTank || FiringTank->GetController() != this || FiringTank->GetOwner() != this
 		|| !AcceptedFireRequestSequence.TryAccept(Request.RequestSequence)) { return; }
 	// A new owner's request is handled once, even when aim/cooldown rejects its shot.

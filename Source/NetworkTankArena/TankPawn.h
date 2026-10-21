@@ -14,6 +14,8 @@ class UTankMovementComponent;
 class UTankWeaponComponent;
 class UMaterialInterface;
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnHealthChanged, float, NewHealth, float, MaxHealth);
+
 UCLASS()
 class NETWORKTANKARENA_API ATankPawn : public APawn
 {
@@ -105,6 +107,9 @@ public:
 	UPROPERTY(ReplicatedUsing = OnRep_Health)
 	int32 Health = 100;
 	
+	UPROPERTY()
+	bool bIsDead = false;
+	
 	UPROPERTY(EditDefaultsOnly, Category = "Damage")
 	float DamageFlashDuration = 0.3f;
 	
@@ -116,13 +121,14 @@ public:
 	
 	virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator, AActor* DamageCauser) override;
 	
+	UPROPERTY(BlueprintAssignable)
+	FOnHealthChanged OnHealthChanged;
+	
 private:
 	void Die();
 	void StartDamageFlash();
 	void EndDamageFlash();
 	void Respawn();
-	
-	bool bIsDead = false;
 	
 	UPROPERTY()
 	TArray<TObjectPtr<UMaterialInterface>> OriginalMaterials;

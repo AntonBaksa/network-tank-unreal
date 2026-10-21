@@ -1,5 +1,6 @@
 #include "TankPawn.h"
 
+#include "HealthBarUW.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
@@ -12,6 +13,7 @@
 #include "TankWeaponComponent.h"
 #include "TimerManager.h"
 #include "Materials/MaterialInterface.h"
+#include "Components/WidgetComponent.h"
 
 
 ATankPawn::ATankPawn()
@@ -116,6 +118,15 @@ void ATankPawn::BeginPlay()
 		for (int32 i = 0; i < Mesh->GetNumMaterials(); i++)
 		{
 			OriginalMaterials.Add(Mesh->GetMaterial(i));
+		}
+	}
+	
+	if (UWidgetComponent* WidgetComp = FindComponentByClass<UWidgetComponent>())
+	{
+		WidgetComp->InitWidget();
+		if (UHealthBarUW* Bar = Cast<UHealthBarUW>(WidgetComp->GetUserWidgetObject()))
+		{
+			Bar->SetTank(this);
 		}
 	}
 }
@@ -279,6 +290,7 @@ float ATankPawn::TakeDamage(float DamageAmount, struct FDamageEvent const& Damag
 
 void ATankPawn::OnRep_Health()
 {
+	OnHealthChanged.Broadcast(Health, MaxHealth);
 	StartDamageFlash();
 }
 
@@ -287,6 +299,7 @@ void ATankPawn::Die()
 	bIsDead = true;
 	SetActorHiddenInGame(true);
 	SetActorEnableCollision(false);
+	ClearControlIntent();
 	GetWorldTimerManager().SetTimer(RespawnTimer, this, &ATankPawn::Respawn, RespawnDelay, false);
 }
 
@@ -326,5 +339,6 @@ void ATankPawn::Respawn()
 	SetActorHiddenInGame(false);
 	SetActorEnableCollision(true);
 	Health = MaxHealth;
+	OnHealthChanged.Broadcast(Health, MaxHealth);
 	bIsDead = false;
 }
