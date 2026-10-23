@@ -22,6 +22,7 @@ ATankPawn::ATankPawn()
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.TickGroup = TG_PrePhysics;
 	bReplicates = true;
+	bAlwaysRelevant = true;
 	SetReplicatingMovement(true);
 	SetNetUpdateFrequency(20.f);
 	SetMinNetUpdateFrequency(20.f);
