@@ -14,6 +14,7 @@
 #include "TimerManager.h"
 #include "Materials/MaterialInterface.h"
 #include "Components/WidgetComponent.h"
+#include "GameFramework/PlayerState.h"
 
 
 ATankPawn::ATankPawn()
@@ -277,26 +278,36 @@ float ATankPawn::TakeDamage(float DamageAmount, struct FDamageEvent const& Damag
 		return 0.f;
 	}
 	
+	const int32 OldHealth = Health;
 	Health -= DamageAmount;
-	OnRep_Health();
+	OnRep_Health(OldHealth);
 	
 	if (Health <= 0)
 	{
 		Die();
 	}
 	
+	UE_LOG(LogTemp, Warning, TEXT("time=%.3f Player:%s Damage %.0f (Health=%d, bIsDead=%d)"),
+		FPlatformTime::Seconds(), *GetName(), DamageAmount, Health, bIsDead);
+	
 	return DamageAmount;
 }
 
-void ATankPawn::OnRep_Health()
+void ATankPawn::OnRep_Health(int32 OldHealth)
 {
 	OnHealthChanged.Broadcast(Health, MaxHealth);
-	StartDamageFlash();
+	
+	if (Health < OldHealth)
+	{
+		StartDamageFlash();
+	}
 }
 
 void ATankPawn::Die()
 {
 	bIsDead = true;
+	UE_LOG(LogTemp, Warning, TEXT("time=%.3f Player%s DIE (bIsDead %d)"),
+		FPlatformTime::Seconds(), *GetName(), bIsDead);
 	SetActorHiddenInGame(true);
 	SetActorEnableCollision(false);
 	ClearControlIntent();
@@ -339,6 +350,8 @@ void ATankPawn::Respawn()
 	SetActorHiddenInGame(false);
 	SetActorEnableCollision(true);
 	Health = MaxHealth;
-	OnHealthChanged.Broadcast(Health, MaxHealth);
+	OnRep_Health(0);
 	bIsDead = false;
+	UE_LOG(LogTemp, Warning, TEXT("time=%.3f Player%s RESPAWN (bIsDead %d)"),
+		FPlatformTime::Seconds(), *GetName(), bIsDead);
 }

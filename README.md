@@ -1,40 +1,26 @@
-# Network Tank Arena
+Project / feature summary:
+The Project was based on the Arena tank network starter project. I worked on implementing health, death and respawn to the tanks. With a visible health bar above each tank displaying their respective health.
 
-Student starter for the Network Programming lab. Requires **Unreal Engine 5.7.4**
-and the Windows C++ toolchain required by Unreal. Open `NetworkTankArena.uproject`
-with UE 5.7.4 and build the project if prompted. The startup level is `TestMap`.
+How to run and test the project:
+Unreal version 5.8
+Generate visual studio files if needed. Then Open NetworkTankArena.uproject.
+Make sure that PIE Settings is set to 2 players and net mode to listen server.
+In the advanced settings under multiplayer options start with network emulation set to off. Run and try and shoot the other tank until it dies and wait for it to respawn. Then try with turning on Network Emulation and set it to custom with 150 minimum latency and 300 maximum and 20 packet loss percentage for both incoming and outgoing. 
 
-W/S move forward/backward, A/D turn the chassis, and the mouse aims the turret
-independently. Left mouse sends one discrete fire request per fresh press;
-the server fires replicated projectiles at a persistent damage-test cube.
-Enhanced Input is configured through **IA_Fire**,
-the fire mapping in **IMC_Tank**, and **BP_TankPlayerController's Fire Action**.
-The existing asset setup and earlier local firing behavior were manually verified in UE 5.7.4.
-Release the focus-acquiring click before firing; that specific capture behavior
-has not been verified. See [Authoritative network combat](docs/NETWORK_COMBAT.md)
-for the current contract, automation and manual checks. Network combat and the
-target readout still require manual UE 5.7.4 verification. Tank health is not implemented.
+What you implemented or changed:
+I implemented a health, death and respawn cycle. If a tank gets hit, the client sends a request to the server which then updates the health and then replicates it to the clients and plays a damage flash by changing the material to bright red for a short period. Every time the health changes it sends a event that will update the health bar. I simulated death by turning of visibility and collision and disabling all other input actions and sets a timer for when to respawn. The respawn turns everything back on and resets health back to maximum. 
 
-To run two players locally:
+Important client/server, authority and replication decisions.
+I decided that the server would always have authority and decide what changes and what is the truth. The server knows the health and replicates it to the client every time it changes.
 
-1. Open `TestMap` and select **Play → Advanced Settings**.
-2. Set **Number of Players = 2** and **Net Mode = Play As Listen Server**.
-3. Use **New Editor Window (PIE)** and enable **Run Under One Process**.
-4. Select **Default Player Start**, then Play. Focus each player window in turn
-   to control that player's tank. Shift+F1 releases the mouse from PIE.
-5. Each window should see both tanks move and aim. Stop PIE and repeat.
+The network conditions used for testing:
+I tested with working baseline with emulation off. And a impaired version with emulation on custom for everyone with 150 minimum latency and 300 maximum latency and 20% packet loss for both incoming and outgoing traffic.
 
-Movement is server-authoritative without prediction; the client waits for server
-updates, so some input delay and stepped motion are expected.
+At least one networking/synchronization problem you encountered and how you diagnosed it:
+Sometimes when dying there would be no red damage flash and it would appear on respawn instead. Diagnosed it mostly visually by seeing the damage flash appear when it is not supposed to and by using logs that state when something happens and for who. 
 
-Thursday Lab 2 starts with [Network conditions](docs/LAB_2_NETWORK_CONDITIONS.md):
-use its PIE setup and impairment profiles to observe this movement baseline.
-Friday Lab 3 adds reliable fire requests, server collision/damage, replicated
-projectiles and target totals. Projectile presentation deliberately has no prediction
-or custom interpolation.
+The networking improvement or optimization you made, including why you chose it:
+I decided to pass through the old health before the tank takes damage when replicating so that i can check weather the new health was more or less than the previous and only show the damage flash if the new health was lower than the old health.
 
-For a packaged **Development** build, start two copies. In the first copy, open
-the console with tilde and enter `HostLocalhost`. In the second, enter
-`JoinLocalhost`. This uses `127.0.0.1:7777`; start the host before joining.
-These commands start from standalone play and require `TestMap` in the package.
-No account or online service is required.
+Known limitations, trade-offs or remaining problems.
+The client side is still very jittery and suffers from latency which could probably be reduced with prediction and perhaps if needed some interpolation too.

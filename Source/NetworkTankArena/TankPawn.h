@@ -117,7 +117,7 @@ public:
 	float RespawnDelay = 5.f;
 	
 	UFUNCTION()
-	void OnRep_Health();
+	void OnRep_Health(int32 OldHealth);
 	
 	virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator, AActor* DamageCauser) override;
 	
